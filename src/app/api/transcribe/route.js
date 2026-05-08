@@ -1,9 +1,17 @@
 export async function POST(request) {
+  if (!process.env.OPENAI_APIKEY) {
+    return Response.json({ error: "OPENAI_APIKEY omgevingsvariabele ontbreekt" }, { status: 500 });
+  }
+
   const formData = await request.formData();
   const audio = formData.get("audio");
 
+  if (!audio) {
+    return Response.json({ error: "Geen audio ontvangen" }, { status: 400 });
+  }
+
   const openaiForm = new FormData();
-  openaiForm.append("file", audio, "audio.webm");
+  openaiForm.append("file", audio);
   openaiForm.append("model", "whisper-1");
   openaiForm.append("language", "es");
 
@@ -15,7 +23,7 @@ export async function POST(request) {
 
   if (!response.ok) {
     const err = await response.text();
-    return Response.json({ error: err }, { status: response.status });
+    return Response.json({ error: `OpenAI fout ${response.status}: ${err}` }, { status: response.status });
   }
 
   const data = await response.json();

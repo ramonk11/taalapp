@@ -376,7 +376,12 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
       source.connect(analyser);
       const timeData = new Uint8Array(analyser.fftSize);
 
-      const mediaRecorder = new MediaRecorder(stream);
+      // Pick best supported MIME type for Whisper compatibility
+      const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"]
+        .find((t) => MediaRecorder.isTypeSupported(t)) || "";
+      const ext = mimeType.includes("mp4") ? "mp4" : mimeType.includes("ogg") ? "ogg" : "webm";
+
+      const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (e) => {
@@ -387,15 +392,21 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
         stream.getTracks().forEach((t) => t.stop());
         try { audioCtx.close(); } catch {}
         if (audioChunksRef.current.length === 0) return;
-        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const blob = new Blob(audioChunksRef.current, { type: mimeType || "audio/webm" });
         const formData = new FormData();
-        formData.append("audio", blob, "audio.webm");
+        formData.append("audio", blob, `audio.${ext}`);
         setTranscribing(true);
         try {
           const res = await fetch("/api/transcribe", { method: "POST", body: formData });
           const data = await res.json();
-          if (data.text?.trim()) sendMessage(data.text);
-        } catch { /* ignore */ }
+          if (data.error) {
+            setMessages((prev) => [...prev, { role: "assistant", content: `❌ Transcriptie fout: ${data.error}`, ts: Date.now() }]);
+          } else if (data.text?.trim()) {
+            sendMessage(data.text);
+          }
+        } catch (err) {
+          setMessages((prev) => [...prev, { role: "assistant", content: `❌ Verbindingsfout: ${err.message}`, ts: Date.now() }]);
+        }
         setTranscribing(false);
       };
 
