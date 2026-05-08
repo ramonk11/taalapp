@@ -305,6 +305,7 @@ body {
   height: 100vh;
   max-width: 680px;
   margin: 0 auto;
+  position: relative;
 }
 
 .chat-header {
@@ -489,6 +490,189 @@ body {
 .send-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.mic-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.mic-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mic-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mic-btn.listening {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+  animation: mic-pulse 1.2s ease-in-out infinite;
+}
+
+.mic-btn.transcribing {
+  background: rgba(234, 179, 8, 0.15);
+  border-color: rgba(234, 179, 8, 0.5);
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15); }
+  50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0.05); }
+}
+
+.voice-toggle-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 17px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.voice-toggle-btn.on {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.4);
+}
+
+.voice-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.speaking-indicator {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 6px 14px;
+  margin-left: 40px;
+}
+
+.speaking-bar {
+  width: 3px;
+  border-radius: 3px;
+  background: #818cf8;
+  animation: speaking-wave 0.8s ease-in-out infinite;
+}
+
+.speaking-bar:nth-child(1) { height: 8px; }
+.speaking-bar:nth-child(2) { height: 14px; }
+.speaking-bar:nth-child(3) { height: 20px; }
+.speaking-bar:nth-child(4) { height: 14px; }
+.speaking-bar:nth-child(5) { height: 8px; }
+
+@keyframes speaking-wave {
+  0%, 100% { transform: scaleY(0.4); opacity: 0.5; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
+/* ─── Conversation Mode ─── */
+
+.convo-start-btn {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 12px 24px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border: none;
+  border-radius: 999px;
+  color: white;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4);
+  transition: transform 0.15s, box-shadow 0.15s;
+  white-space: nowrap;
+  z-index: 10;
+}
+
+.convo-start-btn:hover {
+  transform: translateX(-50%) translateY(-2px);
+  box-shadow: 0 6px 28px rgba(99, 102, 241, 0.5);
+}
+
+.convo-overlay {
+  position: absolute;
+  inset: 57px 0 57px 0;
+  background: rgba(12, 15, 26, 0.96);
+  backdrop-filter: blur(16px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  z-index: 20;
+  animation: fadeInUp 0.2s ease-out;
+}
+
+.convo-orb {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 2px solid var(--orb-color, #818cf8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: orb-pulse 1.8s ease-in-out infinite;
+  box-shadow: 0 0 40px color-mix(in srgb, var(--orb-color, #818cf8) 30%, transparent);
+}
+
+.convo-orb-inner {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  opacity: 0.9;
+  transition: background 0.3s;
+}
+
+@keyframes orb-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.06); opacity: 1; }
+}
+
+.convo-label {
+  font-size: 17px;
+  font-weight: 500;
+  color: #cbd5e1;
+  letter-spacing: 0.2px;
+}
+
+.convo-stop-btn {
+  padding: 10px 28px;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 999px;
+  color: #fca5a5;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.convo-stop-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
 }
 
 /* ─── Stats Screen ─── */

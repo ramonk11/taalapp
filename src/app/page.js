@@ -210,20 +210,107 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [sessionId] = useState(() => Date.now().toString());
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [voiceOutput, setVoiceOutput] = useState(true);
+  const [conversationMode, setConversationMode] = useState(false);
+
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const hasStarted = useRef(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const currentAudioRef = useRef(null);
+  const silenceIntervalRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const messagesRef = useRef([]);
+  const loadingRef = useRef(false);
+  const voiceOutputRef = useRef(true);
+  const conversationModeRef = useRef(false);
+  const sendMessageRef = useRef(null);
+  const autoListenRef = useRef(null);
 
-  const scrollToBottom = () => {
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { loadingRef.current = loading; }, [loading]);
+  useEffect(() => { voiceOutputRef.current = voiceOutput; }, [voiceOutput]);
+  useEffect(() => { conversationModeRef.current = conversationMode; }, [conversationMode]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  useEffect(() => {
+    return () => {
+      clearInterval(silenceIntervalRef.current);
+      mediaRecorderRef.current?.stop();
+      if (currentAudioRef.current) currentAudioRef.current.pause();
+      try { audioContextRef.current?.close(); } catch {}
+    };
+  }, []);
+
+  const stopCurrentAudio = () => {
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+      setIsSpeaking(false);
+    }
   };
 
-  useEffect(scrollToBottom, [messages]);
+  const speak = useCallback(async (text) => {
+    if (!voiceOutputRef.current) {
+      if (conversationModeRef.current && !loadingRef.current) {
+        setTimeout(() => autoListenRef.current?.(), 400);
+      }
+      return;
+    }
+    stopCurrentAudio();
+    const cleanText = text
+      .replace(/✏️[^\n]*/g, "")
+      .replace(/❌[^\n]*/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!cleanText) return;
+    try {
+      setIsSpeaking(true);
+      const response = await fetch("/api/speak", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: cleanText }),
+      });
+      if (!response.ok) throw new Error("TTS mislukt");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      currentAudioRef.current = audio;
+      audio.onended = () => {
+        setIsSpeaking(false);
+        URL.revokeObjectURL(url);
+        currentAudioRef.current = null;
+        if (conversationModeRef.current && !loadingRef.current) {
+          setTimeout(() => autoListenRef.current?.(), 400);
+        }
+      };
+      audio.onerror = () => {
+        setIsSpeaking(false);
+        currentAudioRef.current = null;
+        if (conversationModeRef.current && !loadingRef.current) {
+          setTimeout(() => autoListenRef.current?.(), 400);
+        }
+      };
+      await audio.play();
+    } catch {
+      setIsSpeaking(false);
+      if (conversationModeRef.current && !loadingRef.current) {
+        setTimeout(() => autoListenRef.current?.(), 400);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const callAPI = useCallback(async (msgs) => {
     const systemPrompt = buildSystemPrompt(config.lang, config.level, config.mode, errorPatterns);
-
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -239,43 +326,41 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
         messages: msgs.map((m) => ({ role: m.role, content: m.content })),
       }),
     });
-
     if (!response.ok) {
       const err = await response.text();
       throw new Error(`API Error ${response.status}: ${err}`);
     }
-
     const data = await response.json();
     return data.content.map((c) => c.text || "").join("\n");
   }, [config, errorPatterns]);
 
-  // Start conversation
   useEffect(() => {
     if (hasStarted.current) return;
     hasStarted.current = true;
-
     (async () => {
       setLoading(true);
       try {
         const initMsgs = [{ role: "user", content: "Hallo! Ik wil graag oefenen." }];
         const reply = await callAPI(initMsgs);
         setMessages([{ role: "assistant", content: reply, ts: Date.now() }]);
+        speak(reply);
       } catch (e) {
         setMessages([{ role: "assistant", content: `❌ Fout: ${e.message}`, ts: Date.now() }]);
       }
       setLoading(false);
     })();
-  }, [callAPI]);
+  }, [callAPI, speak]);
 
-  const sendMessage = async () => {
-    if (!input.trim() || loading) return;
-
-    const userMsg = { role: "user", content: input.trim(), ts: Date.now() };
-    const newMessages = [...messages, userMsg];
+  const sendMessage = async (textOverride) => {
+    const text = typeof textOverride === "string" ? textOverride : (inputRef.current?.value || "");
+    if (!text.trim() || loadingRef.current) return;
+    stopCurrentAudio();
+    const userMsg = { role: "user", content: text.trim(), ts: Date.now() };
+    const newMessages = [...messagesRef.current, userMsg];
     setMessages(newMessages);
     setInput("");
     setLoading(true);
-
+    loadingRef.current = true;
     try {
       const apiMessages = [
         { role: "user", content: "Hallo! Ik wil graag oefenen." },
@@ -285,49 +370,180 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
       const assistantMsg = { role: "assistant", content: reply, ts: Date.now() };
       const updated = [...newMessages, assistantMsg];
       setMessages(updated);
-
-      // Save conversation
-      saveConversation({
-        id: sessionId,
-        lang: config.lang,
-        level: config.level,
-        mode: config.mode,
-        messages: updated,
-        updatedAt: Date.now(),
-      });
-
-      // Detect corrections
-      if (reply.includes("✏️") && onNewErrors) {
-        onNewErrors(reply);
-      }
+      speak(reply);
+      saveConversation({ id: sessionId, lang: config.lang, level: config.level, mode: config.mode, messages: updated, updatedAt: Date.now() });
+      if (reply.includes("✏️") && onNewErrors) onNewErrors(reply);
     } catch (e) {
       setMessages((prev) => [...prev, { role: "assistant", content: `❌ ${e.message}`, ts: Date.now() }]);
     }
     setLoading(false);
-    inputRef.current?.focus();
+    loadingRef.current = false;
+    if (!conversationModeRef.current) inputRef.current?.focus();
+  };
+  sendMessageRef.current = sendMessage;
+
+  const autoListen = async () => {
+    if (!conversationModeRef.current || loadingRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        try { audioContext.close(); } catch {}
+        if (!conversationModeRef.current || audioChunksRef.current.length === 0) return;
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const formData = new FormData();
+        formData.append("audio", blob, "audio.webm");
+        setTranscribing(true);
+        try {
+          const res = await fetch("/api/transcribe", { method: "POST", body: formData });
+          const data = await res.json();
+          if (data.text?.trim() && conversationModeRef.current) {
+            await sendMessageRef.current(data.text);
+          } else if (conversationModeRef.current) {
+            setTimeout(() => autoListenRef.current?.(), 300);
+          }
+        } catch {
+          if (conversationModeRef.current) setTimeout(() => autoListenRef.current?.(), 300);
+        }
+        setTranscribing(false);
+      };
+
+      mediaRecorder.start(100);
+      setIsListening(true);
+
+      // Silence detection
+      let silenceMs = 0;
+      let hasSpeech = false;
+      clearInterval(silenceIntervalRef.current);
+      silenceIntervalRef.current = setInterval(() => {
+        if (!conversationModeRef.current) {
+          clearInterval(silenceIntervalRef.current);
+          if (mediaRecorder.state === "recording") mediaRecorder.stop();
+          setIsListening(false);
+          return;
+        }
+        const freqData = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(freqData);
+        const avg = freqData.reduce((a, b) => a + b, 0) / freqData.length;
+        if (avg > 8) {
+          hasSpeech = true;
+          silenceMs = 0;
+        } else if (hasSpeech) {
+          silenceMs += 100;
+          if (silenceMs >= 1500) {
+            clearInterval(silenceIntervalRef.current);
+            if (mediaRecorder.state === "recording") mediaRecorder.stop();
+            setIsListening(false);
+          }
+        }
+      }, 100);
+    } catch {
+      setConversationMode(false);
+      conversationModeRef.current = false;
+    }
+  };
+  autoListenRef.current = autoListen;
+
+  const startConversationMode = () => {
+    setConversationMode(true);
+    conversationModeRef.current = true;
+    if (!currentAudioRef.current && !loadingRef.current) {
+      setTimeout(() => autoListenRef.current?.(), 300);
+    }
+  };
+
+  const stopConversationMode = () => {
+    setConversationMode(false);
+    conversationModeRef.current = false;
+    clearInterval(silenceIntervalRef.current);
+    if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
+    setIsListening(false);
+    setTranscribing(false);
+  };
+
+  const startListening = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      stopCurrentAudio();
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const formData = new FormData();
+        formData.append("audio", blob, "audio.webm");
+        setTranscribing(true);
+        try {
+          const res = await fetch("/api/transcribe", { method: "POST", body: formData });
+          const data = await res.json();
+          if (data.text?.trim()) sendMessage(data.text);
+        } catch { /* ignore */ }
+        setTranscribing(false);
+      };
+      mediaRecorder.start();
+      setIsListening(true);
+    } catch {
+      alert("Microfoon toegang geweigerd. Geef toestemming in je browser.");
+    }
+  };
+
+  const stopListening = () => {
+    mediaRecorderRef.current?.stop();
+    setIsListening(false);
   };
 
   const langObj = LANGUAGES.find((l) => l.code === config.lang);
   const levelObj = LEVELS.find((l) => l.code === config.level);
   const modeObj = MODES.find((m) => m.id === config.mode);
 
+  const convoStatus = isListening
+    ? { label: "Jij aan het woord…", color: "#ef4444" }
+    : isSpeaking
+    ? { label: "AI aan het woord…", color: "#818cf8" }
+    : transcribing || loading
+    ? { label: "Nadenken…", color: "#f59e0b" }
+    : { label: "Klaar om te luisteren…", color: "#4ade80" };
+
   return (
     <div className="chat-container">
-      {/* Header */}
       <div className="chat-header">
         <button onClick={onBack} className="back-btn">←</button>
         <div className="header-info">
           <span className="header-title">{langObj.flag} {langObj.name}</span>
           <span className="header-sub">{levelObj.code} · {modeObj.icon} {modeObj.label}</span>
         </div>
+        <button
+          onClick={() => { const next = !voiceOutput; setVoiceOutput(next); if (!next) stopCurrentAudio(); }}
+          className={`voice-toggle-btn ${voiceOutput ? "on" : ""}`}
+          title={voiceOutput ? "Stem uitzetten" : "Stem aanzetten"}
+        >
+          {voiceOutput ? "🔊" : "🔇"}
+        </button>
         <div className="level-dot" style={{ background: levelObj.color }}>{levelObj.code}</div>
       </div>
 
-      {/* Messages */}
       <div className="messages-area">
-        {messages.map((msg, i) => (
-          <ChatMessage key={i} msg={msg} />
-        ))}
+        {messages.map((msg, i) => <ChatMessage key={i} msg={msg} />)}
         {loading && (
           <div className="msg-row assistant">
             <div className="avatar">🤖</div>
@@ -340,28 +556,60 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
             </div>
           </div>
         )}
+        {isSpeaking && !loading && (
+          <div className="speaking-indicator">
+            <span className="speaking-bar" />
+            <span className="speaking-bar" style={{ animationDelay: "0.1s" }} />
+            <span className="speaking-bar" style={{ animationDelay: "0.2s" }} />
+            <span className="speaking-bar" style={{ animationDelay: "0.3s" }} />
+            <span className="speaking-bar" style={{ animationDelay: "0.4s" }} />
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
+      {conversationMode && (
+        <div className="convo-overlay">
+          <div className="convo-orb" style={{ "--orb-color": convoStatus.color }}>
+            <div className="convo-orb-inner" style={{ background: convoStatus.color }} />
+          </div>
+          <p className="convo-label">{convoStatus.label}</p>
+          <button onClick={stopConversationMode} className="convo-stop-btn">Stop gesprek</button>
+        </div>
+      )}
+
       <div className="input-area">
+        <button
+          onClick={isListening ? stopListening : startListening}
+          disabled={loading || conversationMode}
+          className={`mic-btn ${isListening ? "listening" : transcribing ? "transcribing" : ""}`}
+          title={isListening ? "Stop" : "Spreek"}
+        >
+          🎙️
+        </button>
         <input
           ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-          placeholder={`Typ in het ${langObj.native}...`}
+          placeholder={isListening ? "Luisteren…" : transcribing ? "Verwerken…" : "Typ of spreek in het Spaans…"}
           className="chat-input"
-          disabled={loading}
+          disabled={loading || isListening || transcribing || conversationMode}
         />
         <button
-          onClick={sendMessage}
-          disabled={loading || !input.trim()}
+          onClick={() => sendMessage()}
+          disabled={loading || !input.trim() || conversationMode}
           className="send-btn"
         >
           ↑
         </button>
       </div>
+
+      {!conversationMode && (
+        <button onClick={startConversationMode} className="convo-start-btn">
+          🎙️ Gesprek voeren
+        </button>
+      )}
     </div>
   );
 }
