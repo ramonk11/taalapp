@@ -215,7 +215,6 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [voiceOutput, setVoiceOutput] = useState(true);
-  const [conversationMode, setConversationMode] = useState(false);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -223,19 +222,14 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const currentAudioRef = useRef(null);
-  const silenceIntervalRef = useRef(null);
-  const audioContextRef = useRef(null);
+  const silenceTimerRef = useRef(null);
   const messagesRef = useRef([]);
   const loadingRef = useRef(false);
   const voiceOutputRef = useRef(true);
-  const conversationModeRef = useRef(false);
-  const sendMessageRef = useRef(null);
-  const autoListenRef = useRef(null);
 
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { loadingRef.current = loading; }, [loading]);
   useEffect(() => { voiceOutputRef.current = voiceOutput; }, [voiceOutput]);
-  useEffect(() => { conversationModeRef.current = conversationMode; }, [conversationMode]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -243,10 +237,9 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
 
   useEffect(() => {
     return () => {
-      clearInterval(silenceIntervalRef.current);
+      clearTimeout(silenceTimerRef.current);
       mediaRecorderRef.current?.stop();
       if (currentAudioRef.current) currentAudioRef.current.pause();
-      try { audioContextRef.current?.close(); } catch {}
     };
   }, []);
 
@@ -259,12 +252,7 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
   };
 
   const speak = useCallback(async (text) => {
-    if (!voiceOutputRef.current) {
-      if (conversationModeRef.current && !loadingRef.current) {
-        setTimeout(() => autoListenRef.current?.(), 400);
-      }
-      return;
-    }
+    if (!voiceOutputRef.current) return;
     stopCurrentAudio();
     const cleanText = text
       .replace(/✏️[^\n]*/g, "")
@@ -284,27 +272,11 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       currentAudioRef.current = audio;
-      audio.onended = () => {
-        setIsSpeaking(false);
-        URL.revokeObjectURL(url);
-        currentAudioRef.current = null;
-        if (conversationModeRef.current && !loadingRef.current) {
-          setTimeout(() => autoListenRef.current?.(), 400);
-        }
-      };
-      audio.onerror = () => {
-        setIsSpeaking(false);
-        currentAudioRef.current = null;
-        if (conversationModeRef.current && !loadingRef.current) {
-          setTimeout(() => autoListenRef.current?.(), 400);
-        }
-      };
+      audio.onended = () => { setIsSpeaking(false); URL.revokeObjectURL(url); currentAudioRef.current = null; };
+      audio.onerror = () => { setIsSpeaking(false); currentAudioRef.current = null; };
       await audio.play();
     } catch {
       setIsSpeaking(false);
-      if (conversationModeRef.current && !loadingRef.current) {
-        setTimeout(() => autoListenRef.current?.(), 400);
-      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -378,129 +350,43 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
     }
     setLoading(false);
     loadingRef.current = false;
-    if (!conversationModeRef.current) inputRef.current?.focus();
+    inputRef.current?.focus();
   };
-  sendMessageRef.current = sendMessage;
 
-  const autoListen = async () => {
-    if (!conversationModeRef.current || loadingRef.current) return;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioChunksRef.current = [];
-
-      const audioContext = new AudioContext();
-      audioContextRef.current = audioContext;
-      const source = audioContext.createMediaStreamSource(stream);
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 2048;
-      source.connect(analyser);
-
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
-      mediaRecorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        try { audioContext.close(); } catch {}
-        if (!conversationModeRef.current || audioChunksRef.current.length === 0) return;
-        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-        const formData = new FormData();
-        formData.append("audio", blob, "audio.webm");
-        setTranscribing(true);
-        try {
-          const res = await fetch("/api/transcribe", { method: "POST", body: formData });
-          const data = await res.json();
-          if (data.text?.trim() && conversationModeRef.current) {
-            await sendMessageRef.current(data.text);
-          } else if (conversationModeRef.current) {
-            setTimeout(() => autoListenRef.current?.(), 300);
-          }
-        } catch {
-          if (conversationModeRef.current) setTimeout(() => autoListenRef.current?.(), 300);
-        }
-        setTranscribing(false);
-      };
-
-      mediaRecorder.start(100);
-      setIsListening(true);
-
-      // Silence detection via RMS on time domain — much more reliable than frequency average
-      let silenceMs = 0;
-      let hasSpeech = false;
-      const timeData = new Uint8Array(analyser.fftSize);
-
-      // Fallback: stop after 10s regardless
-      const maxTimeout = setTimeout(() => {
-        clearInterval(silenceIntervalRef.current);
-        if (mediaRecorder.state === "recording") mediaRecorder.stop();
-        setIsListening(false);
-      }, 10000);
-
-      clearInterval(silenceIntervalRef.current);
-      silenceIntervalRef.current = setInterval(() => {
-        if (!conversationModeRef.current) {
-          clearInterval(silenceIntervalRef.current);
-          clearTimeout(maxTimeout);
-          if (mediaRecorder.state === "recording") mediaRecorder.stop();
-          setIsListening(false);
-          return;
-        }
-        analyser.getByteTimeDomainData(timeData);
-        const rms = Math.sqrt(
-          timeData.reduce((sum, val) => sum + (val - 128) ** 2, 0) / timeData.length
-        );
-        if (rms > 10) {
-          hasSpeech = true;
-          silenceMs = 0;
-        } else if (hasSpeech) {
-          silenceMs += 100;
-          if (silenceMs >= 1200) {
-            clearInterval(silenceIntervalRef.current);
-            clearTimeout(maxTimeout);
-            if (mediaRecorder.state === "recording") mediaRecorder.stop();
-            setIsListening(false);
-          }
-        }
-      }, 100);
-    } catch {
-      setConversationMode(false);
-      conversationModeRef.current = false;
+  const stopRecording = () => {
+    clearTimeout(silenceTimerRef.current);
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
     }
-  };
-  autoListenRef.current = autoListen;
-
-  const startConversationMode = () => {
-    setConversationMode(true);
-    conversationModeRef.current = true;
-    if (!currentAudioRef.current && !loadingRef.current) {
-      setTimeout(() => autoListenRef.current?.(), 300);
-    }
-  };
-
-  const stopConversationMode = () => {
-    setConversationMode(false);
-    conversationModeRef.current = false;
-    clearInterval(silenceIntervalRef.current);
-    if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
     setIsListening(false);
-    setTranscribing(false);
   };
 
   const startListening = async () => {
+    if (loading || transcribing) return;
+    stopCurrentAudio();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioChunksRef.current = [];
-      stopCurrentAudio();
+
+      // Set up silence detection via Web Audio API
+      const audioCtx = new AudioContext();
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+      const timeData = new Uint8Array(analyser.fftSize);
+
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
+
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
+
       mediaRecorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
+        try { audioCtx.close(); } catch {}
+        if (audioChunksRef.current.length === 0) return;
         const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
         const formData = new FormData();
         formData.append("audio", blob, "audio.webm");
@@ -512,29 +398,39 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
         } catch { /* ignore */ }
         setTranscribing(false);
       };
-      mediaRecorder.start();
+
+      mediaRecorder.start(100);
       setIsListening(true);
+
+      // Silence detection: reset a 2s timer every time sound is detected
+      // If 2s passes without sound after speech started, stop automatically
+      const checkAudio = setInterval(() => {
+        analyser.getByteTimeDomainData(timeData);
+        const rms = Math.sqrt(
+          timeData.reduce((sum, val) => sum + (val - 128) ** 2, 0) / timeData.length
+        );
+        if (rms > 6) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = setTimeout(() => {
+            clearInterval(checkAudio);
+            stopRecording();
+          }, 2000);
+        }
+      }, 100);
+
+      // Hard stop after 30s no matter what
+      setTimeout(() => { clearInterval(checkAudio); stopRecording(); }, 30000);
+
     } catch {
       alert("Microfoon toegang geweigerd. Geef toestemming in je browser.");
     }
-  };
-
-  const stopListening = () => {
-    mediaRecorderRef.current?.stop();
-    setIsListening(false);
   };
 
   const langObj = LANGUAGES.find((l) => l.code === config.lang);
   const levelObj = LEVELS.find((l) => l.code === config.level);
   const modeObj = MODES.find((m) => m.id === config.mode);
 
-  const convoStatus = isListening
-    ? { label: "Jij aan het woord…", color: "#ef4444" }
-    : isSpeaking
-    ? { label: "AI aan het woord…", color: "#818cf8" }
-    : transcribing || loading
-    ? { label: "Nadenken…", color: "#f59e0b" }
-    : { label: "Klaar om te luisteren…", color: "#4ade80" };
+  const micStatus = transcribing ? "Verwerken…" : isListening ? "Luisteren…" : isSpeaking ? "AI spreekt…" : null;
 
   return (
     <div className="chat-container">
@@ -556,7 +452,7 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
 
       <div className="messages-area">
         {messages.map((msg, i) => <ChatMessage key={i} msg={msg} />)}
-        {loading && (
+        {(loading || transcribing) && (
           <div className="msg-row assistant">
             <div className="avatar">🤖</div>
             <div className="msg-bubble msg-assistant">
@@ -580,22 +476,18 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
         <div ref={messagesEndRef} />
       </div>
 
-      {conversationMode && (
-        <div className="convo-overlay">
-          <div className="convo-orb" style={{ "--orb-color": convoStatus.color }}>
-            <div className="convo-orb-inner" style={{ background: convoStatus.color }} />
-          </div>
-          <p className="convo-label">{convoStatus.label}</p>
-          <button onClick={stopConversationMode} className="convo-stop-btn">Stop gesprek</button>
+      {micStatus && (
+        <div className="mic-status-bar">
+          <span className={`mic-status-dot ${isListening ? "listening" : ""}`} />
+          {micStatus}
         </div>
       )}
 
       <div className="input-area">
         <button
-          onClick={isListening ? stopListening : startListening}
-          disabled={loading || conversationMode}
-          className={`mic-btn ${isListening ? "listening" : transcribing ? "transcribing" : ""}`}
-          title={isListening ? "Stop" : "Spreek"}
+          onClick={isListening ? stopRecording : startListening}
+          disabled={loading || transcribing}
+          className={`mic-btn ${isListening ? "listening" : ""}`}
         >
           🎙️
         </button>
@@ -604,24 +496,18 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-          placeholder={isListening ? "Luisteren…" : transcribing ? "Verwerken…" : "Typ of spreek in het Spaans…"}
+          placeholder="Typ of druk op 🎙️ om te spreken…"
           className="chat-input"
-          disabled={loading || isListening || transcribing || conversationMode}
+          disabled={loading || isListening || transcribing}
         />
         <button
           onClick={() => sendMessage()}
-          disabled={loading || !input.trim() || conversationMode}
+          disabled={loading || !input.trim()}
           className="send-btn"
         >
           ↑
         </button>
       </div>
-
-      {!conversationMode && (
-        <button onClick={startConversationMode} className="convo-start-btn">
-          🎙️ Gesprek voeren
-        </button>
-      )}
     </div>
   );
 }
