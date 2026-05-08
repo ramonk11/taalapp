@@ -392,7 +392,7 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
       audioContextRef.current = audioContext;
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 512;
+      analyser.fftSize = 2048;
       source.connect(analyser);
 
       const mediaRecorder = new MediaRecorder(stream);
@@ -427,27 +427,39 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
       mediaRecorder.start(100);
       setIsListening(true);
 
-      // Silence detection
+      // Silence detection via RMS on time domain — much more reliable than frequency average
       let silenceMs = 0;
       let hasSpeech = false;
+      const timeData = new Uint8Array(analyser.fftSize);
+
+      // Fallback: stop after 10s regardless
+      const maxTimeout = setTimeout(() => {
+        clearInterval(silenceIntervalRef.current);
+        if (mediaRecorder.state === "recording") mediaRecorder.stop();
+        setIsListening(false);
+      }, 10000);
+
       clearInterval(silenceIntervalRef.current);
       silenceIntervalRef.current = setInterval(() => {
         if (!conversationModeRef.current) {
           clearInterval(silenceIntervalRef.current);
+          clearTimeout(maxTimeout);
           if (mediaRecorder.state === "recording") mediaRecorder.stop();
           setIsListening(false);
           return;
         }
-        const freqData = new Uint8Array(analyser.frequencyBinCount);
-        analyser.getByteFrequencyData(freqData);
-        const avg = freqData.reduce((a, b) => a + b, 0) / freqData.length;
-        if (avg > 8) {
+        analyser.getByteTimeDomainData(timeData);
+        const rms = Math.sqrt(
+          timeData.reduce((sum, val) => sum + (val - 128) ** 2, 0) / timeData.length
+        );
+        if (rms > 10) {
           hasSpeech = true;
           silenceMs = 0;
         } else if (hasSpeech) {
           silenceMs += 100;
-          if (silenceMs >= 1500) {
+          if (silenceMs >= 1200) {
             clearInterval(silenceIntervalRef.current);
+            clearTimeout(maxTimeout);
             if (mediaRecorder.state === "recording") mediaRecorder.stop();
             setIsListening(false);
           }
