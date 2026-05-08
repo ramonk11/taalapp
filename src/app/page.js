@@ -275,8 +275,10 @@ function ChatScreen({ config, onBack, errorPatterns, onNewErrors }) {
       audio.onended = () => { setIsSpeaking(false); URL.revokeObjectURL(url); currentAudioRef.current = null; };
       audio.onerror = () => { setIsSpeaking(false); currentAudioRef.current = null; };
       await audio.play();
-    } catch {
+    } catch (e) {
       setIsSpeaking(false);
+      console.error("TTS fout:", e);
+      alert(`TTS fout: ${e.message}`);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

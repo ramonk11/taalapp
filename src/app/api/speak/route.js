@@ -1,4 +1,7 @@
 export async function POST(request) {
+  if (!process.env.OPENAI_APIKEY) {
+    return Response.json({ error: "OPENAI_APIKEY ontbreekt" }, { status: 500 });
+  }
   const { text } = await request.json();
 
   const response = await fetch("https://api.openai.com/v1/audio/speech", {
